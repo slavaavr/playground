@@ -1,0 +1,5 @@
+/target
+.idea
+.cargo
+read4me.db
+*.pem

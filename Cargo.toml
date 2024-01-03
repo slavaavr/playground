@@ -1,0 +1,6 @@
+[workspace]
+
+members = [
+    "read4me",
+    "sub4usd",
+]

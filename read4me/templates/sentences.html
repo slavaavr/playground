@@ -1,0 +1,84 @@
+{% extends "index.html" %}
+
+{% block content %}
+<div class="container text-center">
+    {%- if is_admin -%}
+    <div class="input-group my-3">
+        <input id="input_text" type="text" class="form-control"
+               placeholder="Щас бы на рыбалку..." aria-label="input_text"
+               aria-describedby="button-addon2">
+        <button class="btn btn-outline-primary" type="button" id="button-addon2 rounded-circle" onclick="add()">🚀</button>
+    </div>
+    {%- endif -%}
+    <table class="table table-striped">
+        <tbody>
+        {%- for s in sentences -%}
+        <tr>
+            <th scope="row"></th>
+            <td>
+                {{- s.text -}}
+                <div style="float: right;">
+                    <button uid="{{s.id}}" type="button" class="btn btn-outline-success rounded-circle" onclick="play(this)">▶️
+                    </button>
+                    {% if is_admin %}
+                    <button uid="{{s.id}}" type="button" class="btn btn-outline-danger rounded-circle" onclick="drop(this)">❌
+                    </button>
+                    {%- endif -%}
+                </div>
+            </td>
+        </tr>
+        {% endfor %}
+        </tbody>
+    </table>
+</div>
+<script>
+  let input = document.getElementById("input_text");
+  input.addEventListener('keypress', function (event) {
+    if (event.key === 'Enter') {
+      event.preventDefault();
+      add();
+    }
+  });
+
+  function add() {
+    let input = document.getElementById("input_text");
+    fetch("{{sentences_url}}", {
+      method: "POST",
+      mode: "cors",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({"text": input.value}),
+    }).then(resp => {
+      console.log(resp);
+      input.value = "";
+      location.reload();
+    });
+  }
+
+  function drop(el) {
+    let id = el.getAttribute("uid");
+    fetch(`{{sentences_url}}/${id}`, {
+      method: "DELETE",
+      mode: "cors",
+    }).then(_ => {
+      location.reload();
+    });
+  }
+
+
+  function play(el) {
+    let id = el.getAttribute("uid");
+    fetch(`{{sentences_url}}/${id}/play`, {
+      method: "POST",
+      mode: "cors",
+    })
+      .then(resp => resp.text())
+      .then(resp => {
+        let player = document.createElement('audio');
+        player.setAttribute('src', resp);
+        player.play();
+    });
+  }
+</script>
+{% endblock %}
