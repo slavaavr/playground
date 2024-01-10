@@ -6,7 +6,7 @@ use std::time::Duration;
 use frankenstein::{BotCommand, ChatId, GetUpdatesParams, SendMessageParams, SetMyCommandsParams, TelegramApi, UpdateContent};
 
 enum ChanEvent {
-    Price(f32),
+    Price((f64, String)),
     AddChat(i64),
     RemoveChat(i64),
 }
@@ -67,12 +67,13 @@ fn run_tg_loop(tg_api: Arc<frankenstein::Api>, tx: Sender<ChanEvent>) {
 
 fn run_tg_notifier(tg_api: Arc<frankenstein::Api>, rx: Receiver<ChanEvent>) {
     let mut chats: Vec<i64> = vec![];
-    let mut last_price: f32 = 0.0;
+    let mut last_price = 0.0;
+    let mut last_info = String::new();
 
-    let send_event = |chat_id, price| {
+    let send_event = |chat_id, price, info| {
         tg_api.send_message(&SendMessageParams::builder()
             .chat_id(ChatId::from(chat_id))
-            .text(format!("usd: {price}"))
+            .text(format!("{price}: || {info} ||"))
             .build(),
         ).expect("unable to send message to tg");
     };
@@ -81,17 +82,18 @@ fn run_tg_notifier(tg_api: Arc<frankenstein::Api>, rx: Receiver<ChanEvent>) {
         let event = rx.recv().expect("unable to receive event");
 
         match event {
-            ChanEvent::Price(p) => {
-                last_price = p;
+            ChanEvent::Price((price, info)) => {
+                last_price = price;
+                last_info = info;
                 println!("got new price {}", last_price);
 
                 for chat_id in &chats {
-                    send_event(chat_id.clone(), last_price);
+                    send_event(chat_id.clone(), last_price, last_info.clone());
                 }
             }
             ChanEvent::AddChat(chat_id) => {
                 chats.push(chat_id);
-                send_event(chat_id, last_price);
+                send_event(chat_id, last_price, last_info.clone());
             }
             ChanEvent::RemoveChat(chat_id) => {
                 chats.retain(|&x| x != chat_id)
@@ -101,28 +103,64 @@ fn run_tg_notifier(tg_api: Arc<frankenstein::Api>, rx: Receiver<ChanEvent>) {
 }
 
 fn run_usd_price_updater(tx: Sender<ChanEvent>, price_update_interval: Duration) {
-    let usd_curr_url = "https://ligovka.ru/detailed/usd";
-    let mut prev_price: f32 = 0.0;
+    let usd_curr_url = "https://www.banki.ru/products/currencyNodejsApi/getBanksOrExchanges/?sortAttribute=sale&order=asc&regionUrl=sankt-peterburg&currencyId=840&amount=&page=1&latitude=59.939084&longitude=30.315879&isExchangeOffices=1";
+    let mut prev_price: f64 = 0.0;
 
     loop {
-        let res = ureq::get(usd_curr_url)
+        let res: banki::Response = ureq::get(usd_curr_url)
+            .set("cache-control", "no-cache")
+            .set("pragma", "no-cache")
+            .set("x-requested-with", "XMLHttpRequest")
             .call()
-            .expect("unable to get usd currency forecast")
-            .into_string()
-            .expect("unable to convert response to string");
+            .expect("unable to get forecast")
+            .into_json()
+            .expect("unable to parse response");
 
-        let idx = res.find("<td class=\"money_quantity\">от 1000</td>")
-            .expect("unable to find prices for quantity >= 1000 usd");
-        let res = res[idx..].to_string();
-        let res: String = res.splitn(2, "<td class=\"money_price\">").collect::<Vec<_>>()[1].into();
-        let price: f32 = res.splitn(2, "<").collect::<Vec<_>>()[0].parse()
-            .expect("unable to parse string as price");
+        let res = &res.list[0];
+        let price = res.exchange.sale;
+        let info = format!("{}. {}", res.name, res.contact_information.address);
 
         if price.ne(&prev_price) {
-            tx.send(ChanEvent::Price(price)).expect("unable to send price to channel");
+            tx.send(ChanEvent::Price((price, info))).expect("unable to send price to channel");
             prev_price = price;
         }
 
         thread::sleep(price_update_interval);
+    }
+}
+
+mod banki {
+    use serde::Deserialize;
+
+    #[derive(Deserialize, Debug)]
+    #[serde(rename_all = "camelCase")]
+    pub struct Response {
+        pub list: Vec<ResponseItem>,
+    }
+
+    #[derive(Deserialize, Debug)]
+    #[serde(rename_all = "camelCase")]
+    pub struct ResponseItem {
+        pub id: i64,
+        pub name: String,
+        pub bank_name: String,
+        pub exchange: Exchange,
+        pub contact_information: ContactInformation,
+    }
+
+    #[derive(Deserialize, Debug)]
+    #[serde(rename_all = "camelCase")]
+    pub struct Exchange {
+        pub buy: f64,
+        pub sale: f64,
+        pub symbol: String,
+    }
+
+    #[derive(Deserialize, Debug)]
+    #[serde(rename_all = "camelCase")]
+    pub struct ContactInformation {
+        pub address: String,
+        pub phone: String,
+        pub metro_station: Option<String>,
     }
 }
