@@ -1,9 +1,11 @@
 use std::{env, thread};
+use std::cmp::max;
 use std::sync::{Arc, mpsc};
 use std::sync::mpsc::{Receiver, Sender};
 use std::time::Duration;
 
-use frankenstein::{BotCommand, ChatId, GetUpdatesParams, SendMessageParams, SetMyCommandsParams, TelegramApi, UpdateContent};
+use chrono::Timelike;
+use frankenstein::{BotCommand, ChatId, Error, GetUpdatesParams, SendMessageParams, SetMyCommandsParams, TelegramApi, UpdateContent};
 
 enum ChanEvent {
     Price((f64, String)),
@@ -12,7 +14,16 @@ enum ChanEvent {
 }
 
 fn main() {
-    let tg_token = env::var("TG_TOKEN").expect("unable to get TG_TOKEN env");
+    let tg_token: String = env::var("TG_TOKEN")
+        .expect("unable to get TG_TOKEN env");
+
+    let tg_chats: Vec<i64> = env::var_os("TG_CHATS")
+        .unwrap_or_default()
+        .into_string()
+        .expect("unable to cast TG_CHATS env to string")
+        .split(",")
+        .map(|s| s.parse::<i64>().unwrap())
+        .collect();
 
     let price_update_interval = 3 * 60 * Duration::from_secs(60);
     let tg_api = Arc::new(frankenstein::Api::new(&tg_token));
@@ -22,7 +33,7 @@ fn main() {
     let tx_clone = tx.clone();
 
     thread::spawn(move || run_usd_price_updater(tx, price_update_interval));
-    thread::spawn(move || run_tg_notifier(tg_api, rx));
+    thread::spawn(move || run_tg_notifier(rx, tg_api, tg_chats));
 
     run_tg_loop(tg_api_clone, tx_clone);
 }
@@ -43,39 +54,69 @@ fn run_tg_loop(tg_api: Arc<frankenstein::Api>, tx: Sender<ChanEvent>) {
 
     loop {
         let res = tg_api
-            .get_updates(&update_params)
-            .expect("unable to get tg updates");
+            .get_updates(&update_params);
 
-        for update in res.result {
-            if let UpdateContent::Message(msg) = update.content {
-                if let Some(text) = msg.text {
-                    if text == format!("/{SUBSCRIBE}") {
-                        println!("added chat_id {:?}", msg.chat.id);
-                        tx.send(ChanEvent::AddChat(msg.chat.id)).expect("unable to send add chat_id");
-                    } else if text == format!("/{UNSUBSCRIBE}") {
-                        tx.send(ChanEvent::RemoveChat(msg.chat.id)).expect("unable to send remove chat_id");
+        match res {
+            Ok(res) => {
+                for update in res.result {
+                    println!("{:?}", update);
+                    update_params = GetUpdatesParams::builder()
+                        .offset(update.update_id + 1)
+                        .build();
+
+                    if let UpdateContent::Message(msg) = update.content {
+                        if !msg.text.is_some() {
+                            continue;
+                        }
+
+                        let text = msg.text.unwrap();
+
+                        if text == format!("/{SUBSCRIBE}") {
+                            println!("added chat_id {:?}", msg.chat.id);
+                            tx.send(ChanEvent::AddChat(msg.chat.id))
+                                .expect("unable to send add chat_id");
+                        } else if text == format!("/{UNSUBSCRIBE}") {
+                            tx.send(ChanEvent::RemoveChat(msg.chat.id))
+                                .expect("unable to send remove chat_id");
+                        }
                     }
                 }
             }
-
-            update_params = GetUpdatesParams::builder().offset(update.update_id + 1).build()
+            Err(err) => {
+                println!("error while getting updates from tg: {:?}", err);
+                thread::sleep(Duration::from_secs(5 * 60))
+            }
         }
 
-        thread::sleep(Duration::from_secs(3))
+        let hour = chrono::Local::now().hour();
+        let sleep_dur_sec = if let 0..=6 = hour { max(1, 6 - hour) * 60 * 60 } else { 3 };
+
+        thread::sleep(Duration::from_secs(sleep_dur_sec as u64));
     }
 }
 
-fn run_tg_notifier(tg_api: Arc<frankenstein::Api>, rx: Receiver<ChanEvent>) {
-    let mut chats: Vec<i64> = vec![];
+fn run_tg_notifier(rx: Receiver<ChanEvent>, tg_api: Arc<frankenstein::Api>, default_chats: Vec<i64>) {
+    let mut chats: Vec<i64> = default_chats;
     let mut last_price = 0.0;
     let mut last_info = String::new();
 
     let send_event = |chat_id, price, info| {
-        tg_api.send_message(&SendMessageParams::builder()
+        let res = tg_api.send_message(&SendMessageParams::builder()
             .chat_id(ChatId::from(chat_id))
             .text(format!("{price}: || {info} ||"))
             .build(),
-        ).expect("unable to send message to tg");
+        );
+
+        if let Err(err) = res {
+            match err {
+                Error::Api(api_err) => {
+                    if api_err.error_code == 403 {
+                        chats.retain(|&x| x != chat_id);
+                    }
+                }
+                _ => println!("error sending event to tg: {:?}", err),
+            }
+        }
     };
 
     loop {
@@ -96,7 +137,7 @@ fn run_tg_notifier(tg_api: Arc<frankenstein::Api>, rx: Receiver<ChanEvent>) {
                 send_event(chat_id, last_price, last_info.clone());
             }
             ChanEvent::RemoveChat(chat_id) => {
-                chats.retain(|&x| x != chat_id)
+                chats.retain(|&x| x != chat_id);
             }
         }
     }
