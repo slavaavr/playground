@@ -1678,6 +1678,8 @@ dependencies = [
  "chrono",
  "frankenstein 0.29.2",
  "serde",
+ "tracing",
+ "tracing-subscriber",
  "ureq",
 ]
 
