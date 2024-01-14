@@ -1,13 +1,13 @@
 pub struct RateData(pub f64, pub String);
 
-pub trait CurrencyProvider {
-    fn get_rate(&self) -> Result<RateData, String>;
+pub trait RateProvider {
+    fn get_usd_rate(&self) -> Result<RateData, String>;
 }
 
 pub struct TinkoffProvider;
 
-impl CurrencyProvider for TinkoffProvider {
-    fn get_rate(&self) -> Result<RateData, String> {
+impl RateProvider for TinkoffProvider {
+    fn get_usd_rate(&self) -> Result<RateData, String> {
         mod tinkoff {
             use serde::Deserialize;
 
@@ -51,8 +51,8 @@ impl CurrencyProvider for TinkoffProvider {
 
 pub struct BankiProvider;
 
-impl CurrencyProvider for BankiProvider {
-    fn get_rate(&self) -> Result<RateData, String> {
+impl RateProvider for BankiProvider {
+    fn get_usd_rate(&self) -> Result<RateData, String> {
         mod banki {
             use serde::Deserialize;
 

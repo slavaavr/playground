@@ -154,13 +154,13 @@ fn run_tg_notifier(rx: Receiver<ChanEvent>, tg_api: Arc<frankenstein::Api>, defa
 
 fn run_usd_price_updater(
     tx: Sender<ChanEvent>,
-    provider: Box<dyn exchange::CurrencyProvider>,
+    provider: Box<dyn exchange::RateProvider>,
     price_update_interval: Duration,
 ) {
     let mut prev_price: f64 = 0.0;
 
     loop {
-        let RateData(price, info) = provider.get_rate()
+        let RateData(price, info) = provider.get_usd_rate()
             .expect("unable to get rate");
 
         if price.ne(&prev_price) {
