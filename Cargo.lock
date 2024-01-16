@@ -1677,6 +1677,7 @@ version = "0.1.0"
 dependencies = [
  "chrono",
  "frankenstein 0.29.2",
+ "regex",
  "serde",
  "tracing",
  "tracing-subscriber",

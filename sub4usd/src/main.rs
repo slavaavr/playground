@@ -1,12 +1,14 @@
 use std::{env, thread};
 use std::cmp::max;
-use std::sync::{Arc, mpsc};
+use std::sync::{Arc, mpsc, Mutex};
 use std::sync::mpsc::{Receiver, Sender};
 use std::time::Duration;
 
 use chrono::Timelike;
 use frankenstein::{BotCommand, ChatId, Error, GetUpdatesParams, SendMessageParams, SetMyCommandsParams, TelegramApi, UpdateContent};
+use regex::Regex;
 use tracing::{error, info};
+
 use crate::exchange::RateData;
 
 mod exchange;
@@ -15,6 +17,10 @@ enum ChanEvent {
     Price((f64, String)),
     AddChat(i64),
     RemoveChat(i64),
+}
+
+struct State {
+    price_update_interval: Duration,
 }
 
 fn main() {
@@ -32,23 +38,32 @@ fn main() {
         .map(|s| s.parse::<i64>().unwrap())
         .collect();
 
-    let price_update_interval = 3 * 60 * Duration::from_secs(60);
+    let state = Arc::new(Mutex::new(State {
+        price_update_interval: Duration::from_secs(3 * 60 * 60),
+    }));
     let tg_api = Arc::new(frankenstein::Api::new(&tg_token));
     let provider = Box::new(exchange::TinkoffProvider);
     let (tx, rx) = mpsc::channel::<ChanEvent>();
 
     let tg_api_clone = tg_api.clone();
     let tx_clone = tx.clone();
+    let state_clone = state.clone();
 
-    thread::spawn(move || run_usd_price_updater(tx, provider, price_update_interval));
+    thread::spawn(move || run_usd_price_updater(tx, provider, state));
     thread::spawn(move || run_tg_notifier(rx, tg_api, tg_chats));
 
-    run_tg_loop(tg_api_clone, tx_clone);
+    run_tg_loop(tx_clone, tg_api_clone, state_clone);
 }
 
-fn run_tg_loop(tg_api: Arc<frankenstein::Api>, tx: Sender<ChanEvent>) {
+fn run_tg_loop(
+    tx: Sender<ChanEvent>,
+    tg_api: Arc<frankenstein::Api>,
+    state: Arc<Mutex<State>>,
+) {
     const SUBSCRIBE: &str = "subscribe";
     const UNSUBSCRIBE: &str = "unsubscribe";
+
+    let update_interval_re = Regex::new(r"set:update_interval\s+(?<hour>\d+)h\s*").unwrap();
 
     tg_api.set_my_commands(&SetMyCommandsParams::builder()
         .commands(vec![
@@ -57,6 +72,29 @@ fn run_tg_loop(tg_api: Arc<frankenstein::Api>, tx: Sender<ChanEvent>) {
         ])
         .build(),
     ).expect("unable to set commands");
+
+    let handle_command = |chat_id: i64, text: String| {
+        if text == format!("/{SUBSCRIBE}") {
+            info!("added chat_id {:?}", chat_id);
+            tx.send(ChanEvent::AddChat(chat_id))
+                .expect("unable to send add chat_id");
+            return;
+        }
+
+        if text == format!("/{UNSUBSCRIBE}") {
+            tx.send(ChanEvent::RemoveChat(chat_id))
+                .expect("unable to send remove chat_id");
+            return;
+        }
+
+        if update_interval_re.is_match(&text) {
+            let caps = update_interval_re.captures(&text).unwrap();
+            let hour = caps.name("hour").unwrap()
+                .as_str().parse::<u64>().unwrap();
+            state.lock().unwrap().price_update_interval = Duration::from_secs(hour * 60 * 60);
+            return;
+        }
+    };
 
     let mut update_params = GetUpdatesParams::builder().build();
 
@@ -72,20 +110,8 @@ fn run_tg_loop(tg_api: Arc<frankenstein::Api>, tx: Sender<ChanEvent>) {
                         .build();
 
                     if let UpdateContent::Message(msg) = update.content {
-                        if !msg.text.is_some() {
-                            continue;
-                        }
-
-                        let text = msg.text.unwrap();
-
-                        if text == format!("/{SUBSCRIBE}") {
-                            info!("added chat_id {:?}", msg.chat.id);
-
-                            tx.send(ChanEvent::AddChat(msg.chat.id))
-                                .expect("unable to send add chat_id");
-                        } else if text == format!("/{UNSUBSCRIBE}") {
-                            tx.send(ChanEvent::RemoveChat(msg.chat.id))
-                                .expect("unable to send remove chat_id");
+                        if let Some(text) = msg.text {
+                            handle_command(msg.chat.id, text);
                         }
                     }
                 }
@@ -103,7 +129,11 @@ fn run_tg_loop(tg_api: Arc<frankenstein::Api>, tx: Sender<ChanEvent>) {
     }
 }
 
-fn run_tg_notifier(rx: Receiver<ChanEvent>, tg_api: Arc<frankenstein::Api>, default_chats: Vec<i64>) {
+fn run_tg_notifier(
+    rx: Receiver<ChanEvent>,
+    tg_api: Arc<frankenstein::Api>,
+    default_chats: Vec<i64>,
+) {
     let mut chats: Vec<i64> = default_chats;
     let mut last_price = 0.0;
     let mut last_info = String::new();
@@ -155,7 +185,7 @@ fn run_tg_notifier(rx: Receiver<ChanEvent>, tg_api: Arc<frankenstein::Api>, defa
 fn run_usd_price_updater(
     tx: Sender<ChanEvent>,
     provider: Box<dyn exchange::RateProvider>,
-    price_update_interval: Duration,
+    state: Arc<Mutex<State>>,
 ) {
     let mut prev_price: f64 = 0.0;
 
@@ -168,6 +198,30 @@ fn run_usd_price_updater(
             prev_price = price;
         }
 
-        thread::sleep(price_update_interval);
+        let dur = {
+            let state = state.lock().unwrap();
+            state.price_update_interval
+        };
+
+        thread::sleep(dur);
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use regex::Regex;
+
+    #[test]
+    fn update_interval_re() {
+        let update_interval_re = Regex::new(r"set:update_interval\s+(?<hour>\d+)h\s*")
+            .expect("unable to parse regex");
+        let caps = update_interval_re
+            .captures("set:update_interval  42h ")
+            .expect("unable to get captures");
+        let hour = caps
+            .name("hour").expect("unable to get hour")
+            .as_str().parse::<u64>().expect("unable to parse hour");
+
+        assert_eq!(hour, 42);
     }
 }
