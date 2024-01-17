@@ -92,8 +92,11 @@ fn run_tg_loop(
             let hour = caps.name("hour").unwrap()
                 .as_str().parse::<u64>().unwrap();
             state.lock().unwrap().price_update_interval = Duration::from_secs(hour * 60 * 60);
+            info!("update_interval configured to {}h", hour);
             return;
         }
+
+        info!("someone texted: {}", text);
     };
 
     let mut update_params = GetUpdatesParams::builder().build();
