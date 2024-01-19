@@ -14,9 +14,10 @@ use crate::exchange::RateData;
 mod exchange;
 
 enum ChanEvent {
-    Price((f64, String)),
+    Price(RateData),
     AddChat(i64),
     RemoveChat(i64),
+    Text(i64, String),
 }
 
 struct State {
@@ -76,14 +77,20 @@ fn run_tg_loop(
     let handle_command = |chat_id: i64, text: String| {
         if text == format!("/{SUBSCRIBE}") {
             info!("added chat_id {:?}", chat_id);
+
             tx.send(ChanEvent::AddChat(chat_id))
                 .expect("unable to send add chat_id");
+
             return;
         }
 
         if text == format!("/{UNSUBSCRIBE}") {
             tx.send(ChanEvent::RemoveChat(chat_id))
                 .expect("unable to send remove chat_id");
+
+            tx.send(ChanEvent::Text(chat_id, "unsubscribed".into()))
+                .expect("unable to send text event");
+
             return;
         }
 
@@ -91,8 +98,12 @@ fn run_tg_loop(
             let caps = update_interval_re.captures(&text).unwrap();
             let hour = caps.name("hour").unwrap()
                 .as_str().parse::<u64>().unwrap();
+
             state.lock().unwrap().price_update_interval = Duration::from_secs(hour * 60 * 60);
-            info!("update_interval configured to {}h", hour);
+
+            tx.send(ChanEvent::Text(chat_id, "update_interval configured".into()))
+                .expect("unable to send text event");
+
             return;
         }
 
@@ -141,10 +152,10 @@ fn run_tg_notifier(
     let mut last_price = 0.0;
     let mut last_info = String::new();
 
-    let send_event = |chat_id, price, info| -> Result<(), &str> {
+    let send_event = |chat_id, text| -> Result<(), &str> {
         let res = tg_api.send_message(&SendMessageParams::builder()
             .chat_id(ChatId::from(chat_id))
-            .text(format!("{price} :: {info}"))
+            .text(text)
             .build(),
         );
 
@@ -159,27 +170,37 @@ fn run_tg_notifier(
         return Ok(());
     };
 
+    let get_price_msg = |price, info| {
+        format!("{price} :: {info}")
+    };
+
     loop {
         let event = rx.recv().expect("unable to receive event");
 
         match event {
-            ChanEvent::Price((price, info)) => {
-                last_price = price;
-                last_info = info;
+            ChanEvent::Price(rate) => {
+                last_price = rate.0;
+                last_info = rate.1;
                 info!("got new price {}", last_price);
 
                 for chat_id in chats.clone() {
-                    if let Err(_) = send_event(chat_id, last_price, last_info.clone()) {
+                    let text = get_price_msg(last_price, last_info.clone());
+
+                    if let Err(_) = send_event(chat_id, text) {
                         chats.retain(|&x| x != chat_id);
                     }
                 }
             }
             ChanEvent::AddChat(chat_id) => {
                 chats.push(chat_id);
-                send_event(chat_id, last_price, last_info.clone()).unwrap();
+                let text = get_price_msg(last_price, last_info.clone());
+                send_event(chat_id, text).unwrap();
             }
             ChanEvent::RemoveChat(chat_id) => {
                 chats.retain(|&x| x != chat_id);
+            }
+            ChanEvent::Text(chat_id, text) => {
+                send_event(chat_id, text).unwrap();
             }
         }
     }
@@ -193,11 +214,12 @@ fn run_usd_price_updater(
     let mut prev_price: f64 = 0.0;
 
     loop {
-        let RateData(price, info) = provider.get_usd_rate()
+        let rate = provider.get_usd_rate()
             .expect("unable to get rate");
+        let price = rate.0;
 
         if price.ne(&prev_price) {
-            tx.send(ChanEvent::Price((price, info))).expect("unable to send price to channel");
+            tx.send(ChanEvent::Price(rate)).expect("unable to send price to channel");
             prev_price = price;
         }
 
