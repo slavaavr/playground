@@ -1,4 +1,4 @@
-use crate::service::rate::*;
+use crate::service::rate::{RateData, RateProvider};
 
 pub struct Provider;
 
