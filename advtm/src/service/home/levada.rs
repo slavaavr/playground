@@ -26,7 +26,7 @@ pub async fn get_houses() -> Result<Vec<String>, String> {
 
 #[cfg(test)]
 mod test {
-    use crate::service::levada::get_houses;
+    use crate::service::home::levada::get_houses;
 
     #[tokio::test]
     async fn test() {

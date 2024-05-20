@@ -1,2 +1,2 @@
-pub mod usd_rate;
-pub mod levada;
+pub mod home;
+pub mod rate;

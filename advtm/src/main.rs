@@ -21,9 +21,9 @@ async fn main() {
     tracing_subscriber::fmt::init();
 
     let cfg = envy::from_env::<Config>().expect("unable to parse env variables");
-    let tg_valid_user_ids = cfg.tg_valid_user_ids.split(",").map(str::to_string).collect();
+    let tg_valid_user_ids: Vec<String> = cfg.tg_valid_user_ids.split(",").map(str::to_string).collect();
 
-    telegram::init(&cfg.tg_token);
+    telegram::init(&cfg.tg_token, &cfg.server_address).await;
     info!("starting web server on address={}...", cfg.server_address);
 
 
