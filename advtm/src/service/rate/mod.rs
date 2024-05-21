@@ -1,5 +1,5 @@
-mod provider_banki;
-mod provider_tinkoff;
+pub mod provider_banki;
+pub mod provider_tinkoff;
 mod rate;
 
 pub use rate::*;

@@ -18,3 +18,5 @@ sea-query = { version = "0.30.6", default-features = false, features = ["derive"
 sea-query-rusqlite = "0.4.0"
 scraper = "0.18.1"
 frankenstein = { version = "0.30.8", default-features = false, features = ["async-http-client"] }
+axum = { version = "0.6.20", features = ["tracing"] }
+axum-server = { version = "0.5.1", features = ["tls-rustls"] }
