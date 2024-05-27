@@ -75,7 +75,7 @@ pub mod sqlite {
 
 
             let mut stmt = self.conn.prepare(&sql.0).expect("unable to prepare stmt");
-            let id = stmt.insert(&*sql.1.as_params())
+            let id = stmt.insert(sql.1.as_params().as_slice())
                 .map_err(|err| format!("unable to insert sentence: {err}"))?;
 
             Ok(id as i32)
@@ -88,7 +88,7 @@ pub mod sqlite {
                 .build_rusqlite(SqliteQueryBuilder);
 
             self.conn
-                .execute(&sql.0, &*sql.1.as_params())
+                .execute(&sql.0, sql.1.as_params().as_slice())
                 .map_err(|err| format!("unable to drop sentence id='{id}: {err}'"))?;
 
             Ok(())
@@ -102,7 +102,7 @@ pub mod sqlite {
                 .build_rusqlite(SqliteQueryBuilder);
 
             let mut stmt = self.conn.prepare(sql.0.as_str()).expect("unable to prepare stmt");
-            let res = stmt.query_row(&*sql.1.as_params(), |row| Ok(Sentence::from(row)))
+            let res = stmt.query_row(sql.1.as_params().as_slice(), |row| Ok(Sentence::from(row)))
                 .map_err(|err| format!("unable to get sentence id='{id}': {err}"))?;
 
             Ok(res)
@@ -116,7 +116,7 @@ pub mod sqlite {
                 .build_rusqlite(SqliteQueryBuilder);
 
             let mut stmt = self.conn.prepare(sql.0.as_str()).expect("unable to prepare stmt");
-            let mut rows = stmt.query(&*sql.1.as_params())
+            let mut rows = stmt.query(sql.1.as_params().as_slice())
                 .map_err(|err| format!("unable to list sentences: {err}"))?;
 
             let mut res = Vec::new();
@@ -136,7 +136,7 @@ pub mod sqlite {
                 .build_rusqlite(SqliteQueryBuilder);
 
             let mut stmt = self.conn.prepare(sql.0.as_str()).expect("unable to prepare stmt");
-            stmt.execute(&*sql.1.as_params())
+            stmt.execute(sql.1.as_params().as_slice())
                 .map_err(|err| format!("unable to update sentence with id={id}: {err}"))?;
 
             Ok(())

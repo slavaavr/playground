@@ -14,14 +14,16 @@ pub enum EventIden {
     Meta,
 }
 
+#[derive(Clone)]
 pub struct Event {
     pub id: i64,
     pub chat_id: i64,
     pub typ: EventType,
-    pub user: String,
-    pub meta: String,
+    pub user: Option<String>,
+    pub meta: Option<String>,
 }
 
+#[derive(Clone)]
 pub enum EventType {
     UsdSubscription,
     LevadaSubscription,
